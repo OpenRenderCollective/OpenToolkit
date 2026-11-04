@@ -88,23 +88,44 @@ int main() {
     bool rejected = false;
     try { doc.dispatch({{"op", "set_material_model"}, {"path", material}, {"model", "portal"}}); } catch (const std::exception&) { rejected = true; }
     check(rejected, "Unsupported surface models are rejected");
-    // Subsurface scattering, as Blender's Principled panel (OpenRemix's attributes).
-    check(field(doc, shader, "openremix:subsurface:weight")["value"] == 0 &&
-          field(doc, shader, "openremix:subsurface:radius")["control"] == "vector" &&
-          field(doc, shader, "openremix:subsurface:radius")["enabled_by"] == "openremix:subsurface:weight",
+    // Subsurface scattering: RTX Remix's inputs, and OpenRemix's weight.
+    const std::string use_profile = "inputs:subsurface_diffusion_profile";
+    const std::string use_distance = "inputs:subsurface_measurement_distance";
+    check(field(doc, shader, use_profile)["value"] == false &&
+          field(doc, shader, "openremix:subsurface:weight")["value"] == 1 &&
+          field(doc, shader, "inputs:subsurface_radius")["control"] == "vector" &&
+          field(doc, shader, "inputs:subsurface_radius")["enabled_by"] == use_profile &&
+          field(doc, shader, use_distance)["disabled_by"] == use_profile &&
+          field(doc, shader, "inputs:subsurface_single_scattering_albedo")["enabled_by"] == use_distance &&
+          field(doc, shader, "inputs:subsurface_transmittance_color")["value"] == Json::array({0.5, 0.5, 0.5}),
           "Subsurface controls on opaque materials");
-    check(!doc.scene()["materials"][0].contains("subsurface"), "No subsurface until weighted");
-    set(shader, "openremix:subsurface:weight", 0.5);
-    set(shader, "openremix:subsurface:radius", Json::array({1, 0.5, 0.25}));
-    set(shader, "openremix:subsurface:scale", 0.01);
+    check(!doc.scene()["materials"][0].contains("subsurface"), "No subsurface until a profile or a measurement distance");
+    set(shader, use_profile, true);
+    // A distance, not a colour: mods author it above 1.
+    set(shader, "inputs:subsurface_radius", Json::array({3.5, 1.5, 0.5}));
+    set(shader, "inputs:subsurface_radius_scale", 22);
+    check(field(doc, shader, "inputs:subsurface_transmittance_color")["value"] == Json::array({1, 1, 1}),
+          "A profile's unauthored transmittance leaves the albedo");
     auto sss = doc.scene()["materials"][0]["subsurface"];
-    check(sss["weight"] == 0.5 && sss["radius"] == Json::array({1, 0.5, 0.25}) && std::abs(sss["scale"].get<float>() - 0.01f) < 1e-6f,
-          "Subsurface reaches the renderer snapshot");
+    check(sss["diffusion_profile"] == true && sss["weight"] == 1 && sss["radius"] == Json::array({3.5, 1.5, 0.5}) &&
+          sss["radius_scale"] == 22 && sss["max_sample_radius"] == 16 && sss["transmittance"] == Json::array({1, 1, 1}),
+          "A diffusion profile reaches the renderer snapshot");
     rejected = false;
-    try { set(shader, "openremix:subsurface:radius", Json::array({1, -1, 0})); } catch (const std::exception&) { rejected = true; }
+    try { set(shader, "inputs:subsurface_radius", Json::array({1, -1, 0})); } catch (const std::exception&) { rejected = true; }
     check(rejected, "A negative radius is rejected");
-    set(shader, "openremix:subsurface:radius", Json::array({0, 0, 0}));
+    set(shader, "inputs:subsurface_radius", Json::array({0, 0, 0}));
     check(doc.scene()["materials"][0]["subsurface"]["radius"] == Json::array({0, 0, 0}), "A zero radius is allowed (only directions must be nonzero)");
+    set(shader, "openremix:subsurface:weight", 0);
+    check(!doc.scene()["materials"][0].contains("subsurface"), "A weight of zero turns subsurface off");
+    set(shader, "openremix:subsurface:weight", 0.5);
+    set(shader, use_profile, false);
+    check(!doc.scene()["materials"][0].contains("subsurface"), "No subsurface without a profile or a measurement distance");
+    set(shader, use_distance, 0.5);
+    set(shader, "inputs:subsurface_single_scattering_albedo", Json::array({0.75, 0.5, 0.25}));
+    sss = doc.scene()["materials"][0]["subsurface"];
+    check(sss["diffusion_profile"] == false && sss["weight"] == 0.5 && sss["measurement_distance"] == 0.5 &&
+          sss["transmittance"] == Json::array({0.5, 0.5, 0.5}) && sss["single_scattering_albedo"] == Json::array({0.75, 0.5, 0.25}),
+          "A thin opaque material reaches the renderer snapshot");
     const auto before = editor::layer_text(doc.stage()->GetEditTarget().GetLayer());
     for (auto invalid : Json::array({
       {{"op", "set_authoring_property"}, {"path", shader}, {"property", "inputs:metallic_constant"}, {"value", 2}},

@@ -683,22 +683,51 @@ private:
         opaque.thinFilmThickness_value = value("thickness", 200, 0, 1500);
       }
     }
-    // OpenRemix's subsurface scattering (opaque), clamped to the extension's ranges.
-    remixapi_MaterialSubsurfaceEXT subsurface{};
-    if (auto found = data.find("subsurface"); found != data.end() && openremix_ && !translucent) {
+    // RTX Remix's subsurface controls (scene.cpp material_json), and OpenRemix's
+    // weight extension.
+    remixapi_MaterialInfoOpaqueSubsurfaceEXT subsurface{};
+    remixapi_MaterialSubsurfaceWeightEXT subsurface_weight{};
+    NativePath sss_transmittance, sss_thickness, sss_single_scattering, sss_radius;
+    if (auto found = data.find("subsurface"); found != data.end() && !translucent) {
       const auto& f = *found;
-      auto value = [](const Json& v, float fallback, float low, float high) {
+      auto number = [&](const char* key, float fallback) {
+        const auto v = f.value(key, Json(fallback));
         const float x = v.is_number() ? v.get<float>() : fallback;
-        return std::isfinite(x) ? std::clamp(x, low, high) : fallback;
+        return std::isfinite(x) ? x : fallback;
       };
-      const auto radius = f.value("radius", Json::array({1, .2f, .1f}));
-      auto channel = [&](size_t i, float fallback) { return value(radius.size() == 3 ? radius[i] : Json(), fallback, 0, 1e6f); };
-      subsurface.sType = REMIXAPI_STRUCT_TYPE_MATERIAL_SUBSURFACE_EXT;
-      subsurface.weight = value(f.value("weight", Json(0)), 0, 0, 1);
-      subsurface.radius = {channel(0, 1), channel(1, .2f), channel(2, .1f)};
-      subsurface.scale = value(f.value("scale", Json(.05f)), .05f, 1e-6f, 1e3f);
-      subsurface.anisotropy = value(f.value("anisotropy", Json(0)), 0, -.9f, .9f);
-      if (subsurface.weight > 0) { subsurface.pNext = info.pNext; info.pNext = &subsurface; }
+      auto color = [&](const char* key, float fallback) {
+        const auto v = f.value(key, Json::array());
+        auto at = [&](size_t i) {
+          const float x = v.size() == 3 && v[i].is_number() ? v[i].get<float>() : fallback;
+          return std::isfinite(x) ? x : fallback;
+        };
+        return remixapi_Float3D{at(0), at(1), at(2)};
+      };
+      subsurface.sType = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_SUBSURFACE_EXT;
+      subsurface.subsurfaceDiffusionProfile = f.value("diffusion_profile", false);
+      subsurface.subsurfaceRadius = color("radius", .5f);
+      subsurface.subsurfaceRadiusScale = number("radius_scale", 1);
+      subsurface.subsurfaceMaxSampleRadius = number("max_sample_radius", 16);
+      subsurface.subsurfaceVolumetricAnisotropy = number("anisotropy", 0);
+      subsurface.subsurfaceTransmittanceColor = color("transmittance", 1);
+      subsurface.subsurfaceMeasurementDistance = number("measurement_distance", 0);
+      subsurface.subsurfaceSingleScatteringAlbedo = color("single_scattering_albedo", .5f);
+      sss_transmittance = native_path(f.value("transmittance_texture", std::string()));
+      sss_thickness = native_path(f.value("thickness_texture", std::string()));
+      sss_single_scattering = native_path(f.value("single_scattering_texture", std::string()));
+      sss_radius = native_path(f.value("radius_texture", std::string()));
+      subsurface.subsurfaceTransmittanceTexture = sss_transmittance.c_str();
+      subsurface.subsurfaceThicknessTexture = sss_thickness.c_str();
+      subsurface.subsurfaceSingleScatteringAlbedoTexture = sss_single_scattering.c_str();
+      subsurface.subsurfaceRadiusTexture = sss_radius.c_str();
+      subsurface.pNext = const_cast<void*>(static_cast<const void*>(info.pNext));
+      info.pNext = &subsurface;
+      if (openremix_) {
+        subsurface_weight.sType = REMIXAPI_STRUCT_TYPE_MATERIAL_SUBSURFACE_WEIGHT_EXT;
+        subsurface_weight.pNext = &subsurface;
+        subsurface_weight.weight = std::clamp(number("weight", 1), 0.f, 1.f);
+        info.pNext = &subsurface_weight;
+      }
     }
     remixapi_MaterialHandle handle{};
     checked(api_.CreateMaterial(&info, &handle), "CreateMaterial");
