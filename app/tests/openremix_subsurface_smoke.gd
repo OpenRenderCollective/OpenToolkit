@@ -106,9 +106,9 @@ func advance() -> void:
 	match phase:
 		0:
 			plain = image
-			author("openremix:subsurface:weight", 1.0)
-			author("openremix:subsurface:radius", [1.0, 0.2, 0.1])
-			author("openremix:subsurface:scale", 0.1)
+			author("inputs:subsurface_diffusion_profile", true)
+			author("inputs:subsurface_radius", [1.0, 0.2, 0.1])
+			author("inputs:subsurface_radius_scale", 1000.0)
 		1:
 			var b := bleed(image)
 			print("Subsurface: %.2f light past the cone's edge, red over blue %.2f" % [b.x, b.y])

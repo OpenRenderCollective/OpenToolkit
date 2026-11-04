@@ -186,23 +186,56 @@ Json fields_for(const UsdPrim& selected) {
     openremix("openremix:iridescence:flowSpeed", "Flow speed", "Iridescence flow", "float", 0.1f, -100, 100,
       "How fast the swirls drift, per second.");
   }
-  // OpenRemix's subsurface scattering, as Blender's Principled panel: weight,
-  // radius per channel, scale in metres, anisotropy (openremix:subsurface:*).
+  // RTX Remix's subsurface inputs, and OpenRemix's weight (an attribute outside
+  // the MDL inputs, which other runtimes ignore). A material is a diffusion
+  // profile, or thin opaque with a measurement distance.
   if (!glass) {
-    auto subsurface = [&](const char* name, const char* label, const char* type, Json fallback, double minimum,
-                          double maximum, const char* tooltip, const char* control = "number") -> Json& {
-      auto& field = add(name, label, "Subsurface", type, fallback, minimum, maximum, control);
-      field["tooltip"] = std::string(tooltip) + " OpenRemix only.";
+    constexpr const char* use_profile = "inputs:subsurface_diffusion_profile";
+    constexpr const char* use_distance = "inputs:subsurface_measurement_distance";
+    const bool profile = read_value(shader.GetAttribute(TfToken(use_profile)), false).get<bool>();
+    add(use_profile, "Diffusion profile", "Subsurface", "bool", false, 0, 1, "bool")
+      ["tooltip"] = "A volume, for skin, flesh and eyes: light enters the surface and leaves it nearby, softening and colouring shadows. Off, a measurement distance makes it a thin layer instead.";
+    add("openremix:subsurface:weight", "Weight", "Subsurface", "float", 1.f, 0, 1)
+      ["tooltip"] = "The share of the diffuse light that scatters. OpenRemix only.";
+    // Under a profile the unauthored colour leaves the albedo as it is (scene.cpp material_json).
+    add("inputs:subsurface_transmittance_color", "Transmittance color", "Subsurface", "color3f",
+        profile ? Json{1, 1, 1} : Json{0.5, 0.5, 0.5}, 0, 1, "color")
+      ["tooltip"] = "Profile: multiplies the albedo. Thin: the colour left after the measurement distance.";
+    add("inputs:subsurface_transmittance_texture", "Transmittance texture", "Subsurface", "asset", "", 0, 1, "texture")
+      ["tooltip"] = "Replaces the transmittance color. Under a profile it is the surface's colour, in place of the albedo: bind the albedo, or leave it empty.";
+    add("inputs:subsurface_volumetric_anisotropy", "Anisotropy", "Subsurface", "float", 0.f, -0.9, 0.9)
+      ["tooltip"] = "Positive: light scatters forward and travels further. Negative: it scatters back toward the surface.";
+    auto volume = [&](const char* name, const char* label, const char* type, Json fallback, double minimum, double maximum,
+                      const char* tooltip, const char* control = "number") -> Json& {
+      auto& field = add(name, label, "Subsurface profile", type, fallback, minimum, maximum, control);
+      field["enabled_by"] = use_profile;
+      field["tooltip"] = tooltip;
       return field;
     };
-    subsurface("openremix:subsurface:weight", "Weight", "float", 0.f, 0, 1,
-      "How much light enters the surface and leaves it nearby, softening and colouring shadows, as on skin, wax or leaves. Zero turns it off.");
-    subsurface("openremix:subsurface:radius", "Radius", "float3", {1, 0.2, 0.1}, 0, 100,
-      "How far red, green and blue light travel under the surface, relative to each other.", "vector")["enabled_by"] = "openremix:subsurface:weight";
-    subsurface("openremix:subsurface:scale", "Scale (m)", "float", 0.05f, 0.0001, 10,
-      "The radius's size in metres. Skin is about 0.01; wax and marble more.")["enabled_by"] = "openremix:subsurface:weight";
-    subsurface("openremix:subsurface:anisotropy", "Anisotropy", "float", 0.f, -0.9, 0.9,
-      "Positive: light scatters forward and travels further. Negative: it scatters back toward the surface.")["enabled_by"] = "openremix:subsurface:weight";
+    // Above the MDL's range of 1: mods author it as a distance, not a colour.
+    volume("inputs:subsurface_radius", "Radius", "color3f", {0.5, 0.5, 0.5}, 0, 100,
+      "How far red, green and blue travel. A distance, not a tint: (1, 0.4, 0.2) reads as skin, white as wax.", "vector")
+      ["axes"] = {"R", "G", "B"};
+    volume("inputs:subsurface_radius_texture", "Radius texture", "asset", "", 0, 1, "Multiplies the radius, per pixel.", "texture");
+    volume("inputs:subsurface_radius_scale", "Radius scale", "float", 1.f, 0, 1000,
+      "The radius's size: 1 is 0.1 mm in OpenRemix. Skin is about 22, wax and marble more.");
+    volume("inputs:subsurface_max_sample_radius", "Max sample radius", "float", 16.f, 0, 65504,
+      "The farthest a sample reaches, in metres, at most 1.");
+    auto thin = [&](const char* name, const char* label, const char* type, Json fallback, double minimum, double maximum,
+                    const char* tooltip, const char* control = "number") -> Json& {
+      auto& field = add(name, label, "Subsurface thin", type, fallback, minimum, maximum, control);
+      field["disabled_by"] = use_profile;
+      field["tooltip"] = tooltip;
+      if (std::string(name) != use_distance) field["enabled_by"] = use_distance;
+      return field;
+    };
+    thin(use_distance, "Measurement distance", "float", 0.f, 0, 16,
+      "The layer's thickness, for leaves, paper and cloth: light from behind passes through. At or below 0.05 it is Lambert transmission. Zero turns it off.");
+    thin("inputs:subsurface_thickness_texture", "Thickness texture", "asset", "", 0, 1, "Replaces the measurement distance, per pixel.", "texture");
+    thin("inputs:subsurface_single_scattering_albedo", "Single scattering albedo", "color3f", {0.5, 0.5, 0.5}, 0, 1,
+      "How much of the light in the layer scatters.", "color");
+    thin("inputs:subsurface_single_scattering_texture", "Single scattering texture", "asset", "", 0, 1,
+      "Replaces the single scattering albedo.", "texture");
   }
   add("inputs:normalmap_texture", "Normal texture", "Normal", "asset", "", 0, 1, "texture");
   add("inputs:enable_emission", "Enable emission", "Emission", "bool", false, 0, 1, "bool");

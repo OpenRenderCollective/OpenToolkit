@@ -256,7 +256,7 @@ func _field(field: Dictionary, parent: Node) -> void:
 			for i in range(3):
 				var spin := SpinBox.new(); spin.min_value = field.min; spin.max_value = field.max
 				spin.step = 0.01; spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-				spin.custom_minimum_size.x = 60; spin.tooltip_text = ["X", "Y", "Z"][i]
+				spin.custom_minimum_size.x = 60; spin.tooltip_text = field.get("axes", ["X", "Y", "Z"])[i]
 				row.add_child(spin); spins.append(spin)
 				_wire_spin(spin, id)
 			row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
